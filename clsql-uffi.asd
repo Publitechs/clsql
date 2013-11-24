@@ -78,7 +78,7 @@
   :description "Common UFFI Helper functions for Common Lisp SQL Interface Library"
   :long-description "cl-sql-uffi package provides common helper functions using the UFFI for the CLSQL package."
 
-  :depends-on (clsql #-:clsql-cffi (:version uffi "2.0")
+  :depends-on (clsql #-:clsql-cffi 
                      #+:clsql-cffi cffi-uffi-compat)
 
   :components
