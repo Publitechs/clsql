@@ -21,6 +21,33 @@
 (setq *rt-oodml*
       '(
 
+(deftest :oodml/read-symbol-value/1-into-this-package
+ (clsql-sys::read-sql-value
+  (clsql-sys::database-output-sql-as-type 'symbol 'clsql-tests::foo nil nil)
+  'symbol nil nil)
+ clsql-tests::foo)
+
+(deftest :oodml/read-symbol-value/2-into-another-pacakge
+ (clsql-sys::read-sql-value
+  (clsql-sys::database-output-sql-as-type 'symbol 'clsql-sys::foo nil nil)
+  'symbol nil nil)
+ clsql-sys::foo)
+
+(deftest :oodml/read-symbol-value/3-keyword
+ (clsql-sys::read-sql-value
+  (clsql-sys::database-output-sql-as-type 'keyword ':foo nil nil)
+  'keyword nil nil)
+ :foo)
+
+(deftest :oodml/read-symbol-value/4-keyword-error
+ (handler-case
+     (clsql-sys::read-sql-value
+      (clsql-sys::database-output-sql-as-type 'keyword 'foo nil nil)
+      'keyword nil nil)
+   (clsql-sys::sql-value-conversion-error (c) (declare (ignore c))
+     :error))
+ :error)
+
 (deftest :oodml/select/1
     (with-dataset *ds-employees*
       (mapcar #'(lambda (e) (slot-value e 'last-name))
@@ -274,6 +301,14 @@
       (mapcar #'(lambda (ea) (slot-value (slot-value ea 'address) 'street-number))
 	      (select 'deferred-employee-address :flatp t :order-by [aaddressid] :caching nil)))
   (10 10 nil nil nil nil))
+
+(deftest :oodm/retrieval/10-slot-columns
+ (with-dataset *ds-employees*
+   (mapcar #'title
+           (select 'employee :flatp t :caching nil
+                   :where [<= [emplid] 3]
+                   :order-by `((,[emplid]  :asc)))))
+ (supplicant :adherent cl-user::novice))
 
 ;; tests update-records-from-instance
 (deftest :oodml/update-records/1
@@ -780,13 +815,13 @@
 	(progn
 	  (clsql:update-records [node]
 				:av-pairs '(([title] "altered title"))
-				:where [= [node-id] 9])
+				:where [= [node-id] (node-id loc2)])
 	  (clsql:update-slot-from-record loc2 'title)
 	  (print-loc loc2))
 	(progn
 	  (clsql:update-records [subloc]
 				:av-pairs '(([loc] "altered loc"))
-				:where [= [subloc-id] 11])
+				:where [= [subloc-id] (subloc-id subloc2)])
 	  (clsql:update-slot-from-record subloc2 'loc)
 	  (print-subloc subloc2)))))
   "9: location-2" "11: second subloc"

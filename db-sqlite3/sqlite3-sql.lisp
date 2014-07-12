@@ -205,11 +205,13 @@
                                              (sqlite3:sqlite3-column-blob stmt i)
                                              (car types)
                                              :length (sqlite3:sqlite3-column-bytes stmt i)
-                                             :encoding (encoding database))
+                                             :encoding (or (encoding database)
+                                                           :utf-8))
                                             (clsql-uffi:convert-raw-field
                                              (sqlite3:sqlite3-column-text stmt i)
                                              (car types)
-                                             :encoding (encoding database))))))
+                                             :encoding (or (encoding database)
+                                                           :utf-8))))))
                    (when field-names
                      (setf col-names (loop for n from 0 below n-col
                                            collect (sqlite3:sqlite3-column-name stmt n))))
@@ -270,8 +272,9 @@
 
 (declaim (inline sqlite3-table-info))
 (defun sqlite3-table-info (table database)
-  (database-query (format nil "PRAGMA table_info('~A')" table)
-                  database nil nil))
+  (let ((sql (format nil "PRAGMA table_info('~A')"
+                     (clsql-sys::unescaped-database-identifier table))))
+    (database-query sql database nil nil)))
 
 (defmethod database-list-attributes (table (database sqlite3-database)
                                            &key (owner nil))
@@ -283,9 +286,10 @@
                                     (database sqlite3-database)
                                     &key (owner nil))
   (declare (ignore owner))
-
+  
   (loop for field-info in (sqlite3-table-info table database)
-      when (string= attribute (second field-info))
+      when (string= (clsql-sys::unescaped-database-identifier attribute)
+                    (second field-info))
       return
         (let* ((raw-type (third field-info))
                (start-length (position #\( raw-type))
@@ -302,6 +306,12 @@
                   nil
                   (if (string-equal (fourth field-info) "0")
                       1 0)))))
+
+(defmethod database-last-auto-increment-id ((database sqlite3-database) table column)
+  (declare (ignore table column))
+  (car (query "SELECT LAST_INSERT_ROWID();"
+	      :flatp t :field-names nil
+	      :database database)))
 
 (defmethod database-create (connection-spec (type (eql :sqlite3)))
   (declare (ignore connection-spec))
@@ -320,7 +330,26 @@
     (or (string-equal ":memory:" name)
         (and (probe-file name) t))))
 
+(defmethod database-get-type-specifier ((type (eql 'integer))
+                                        args database
+                                        (db-type (eql :sqlite3)))
+  (declare (ignore database))
+  (if args
+      (format nil "INTEGER(~A)" (car args))
+      "INTEGER"))
+
+(defmethod database-get-type-specifier ((type (eql 'integer))
+                                        args database
+                                        (db-type (eql :sqlite3)))
+  (declare (ignore database))
+  (if args
+      (format nil "INTEGER(~A)" (car args))
+      "INTEGER"))
+
 ;;; Database capabilities
 
 (defmethod db-type-has-boolean-where? ((db-type (eql :sqlite3)))
   nil)
+
+(defmethod db-type-has-auto-increment? ((db-type (eql :sqlite3)))
+  t)

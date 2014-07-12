@@ -37,9 +37,9 @@ well as any of the filenames in any of the clsql:*foreign-library-search-paths*"
                           (loop for search-path in clsql:*foreign-library-search-paths*
                                 thereis (try-load (merge-pathnames pn search-path))))))
      (when errorp
-       (error "Couldn't load foreign librar~@P ~{~S~^, ~}. (searched ~S)"
+       (error "Couldn't load foreign librar~@P ~{~S~^, ~}. (searched ~S: ~S)"
               (length filenames) filenames
-              'clsql:*foreign-library-search-paths*)))))
+              'clsql:*foreign-library-search-paths* clsql:*foreign-library-search-paths*)))))
 
 ;; searches clsql_uffi64 to accomodate both 32-bit and 64-bit libraries on same system
 (defvar *clsql-uffi-library-filenames*
@@ -50,16 +50,3 @@ well as any of the filenames in any of the clsql:*foreign-library-search-paths*"
   "Used only by CMU. List of library flags needed to be passed to ld to
 load the MySQL client library succesfully.  If this differs at your site,
 set to the right path before compiling or loading the system.")
-
-(defvar *uffi-library-loaded* nil
-  "T if foreign library was able to be loaded successfully")
-
-(defun load-uffi-foreign-library ()
-  (clsql:push-library-path clsql-uffi-system::*clsql-uffi-library-dir*)
-  (find-and-load-foreign-library *clsql-uffi-library-filenames*
-                                 :module "clsql-uffi"
-                                 :supporting-libraries
-                                 *clsql-uffi-supporting-libraries*)
-  (setq *uffi-library-loaded* t))
-
-(load-uffi-foreign-library)

@@ -45,6 +45,10 @@
     :db-constraints :not-null
     :type integer
     :initarg :groupid)
+   (title
+    :accessor title
+    :type symbol
+    :initarg :title)
    (first-name
     :accessor first-name
     :type (varchar 30)
@@ -177,13 +181,8 @@
 
 (defun initialize-ds-employees ()
   ;;  (start-sql-recording :type :both)
-  (let ((*backend-warning-behavior*
-         (if (member *test-database-type* '(:postgresql :postgresql-socket))
-             :ignore
-	     :warn)))
-    (mapc #'clsql:create-view-from-class
-	  '(employee company address employee-address)))
-    
+  (mapc #'clsql:create-view-from-class
+        '(employee company address employee-address))
 
   (setq *test-start-utime* (get-universal-time))
   (let* ((*db-auto-sync* t)
@@ -197,6 +196,7 @@
                                    :emplid 1
                                    :groupid 1
                                    :married t
+                                   :title 'supplicant
                                    :height (1+ (random 1.00))
                                    :bd-utime *test-start-utime*
                                    :birthday now-time
@@ -207,6 +207,7 @@
           employee2 (make-instance 'employee
                                    :emplid 2
                                    :groupid 1
+                                   :title :adherent
                                    :height (1+ (random 1.00))
                                    :married t
                                    :bd-utime *test-start-utime*
@@ -219,6 +220,7 @@
           employee3 (make-instance 'employee
                                    :emplid 3
                                    :groupid 1
+                                   :title 'cl-user::novice
                                    :height (1+ (random 1.00))
                                    :married t
                                    :bd-utime *test-start-utime*

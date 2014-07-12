@@ -193,3 +193,20 @@ the arguments EXPR and DATABASE."))
 
 (defgeneric database-constraint-statement  (constraints database)
   )
+
+(defgeneric database-translate-constraint (constraint database)
+  (:documentation "Given a column constraint returns its
+database-specific name. For example, auto-increment constraints can
+have different names in different database engines."))
+
+(defgeneric filter-select-list ( view-class clsql-sys::select-list database)
+  (:documentation
+   "Gives fine grained control over sql to be executed and mapped to slots
+    called with a dummy instance (so that class precedence can be used)")
+  )
+
+(defgeneric view-classes-and-storable-slots (view-class &key to-database-p)
+  (:documentation "A method that collects all the classes and storable slots
+   that need to be read from or written to the database.
+   to-database-p should be T if we are writing this object to the database
+   and nil when we are reading this object from the database"))

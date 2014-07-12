@@ -44,9 +44,11 @@ B varchar(32))")
 ;; list current tables
 (deftest :fddl/table/1
     (with-dataset *ds-fddl*
-      (sort (mapcar #'string-downcase
-		    (clsql:list-tables ))
-	    #'string<))
+      (let ((tables (sort (mapcar #'string-downcase (clsql:list-tables))
+                          #'string<)))
+        ;; sqlite has a table for autoincrement sequences that we dont care about if
+        ;; it exists
+        (remove "sqlite_sequence" tables :test #'string-equal)))
   ("alpha" "bravo"))
 
 ;; create a table, test for its existence, drop it and test again
@@ -105,7 +107,7 @@ B varchar(32))")
      (progn
        (let ((*backend-warning-behavior*
 	      (if (member *test-database-type*
-			  '(:postgresql :postgresql-socket))
+			  '(:postgresql :postgresql-socket :postgresql-socket3))
 		  :ignore
 		  :warn)))
 	 (case *test-database-underlying-type*
@@ -127,7 +129,7 @@ B varchar(32))")
      (progn
        (let ((*backend-warning-behavior*
 	      (if (member *test-database-type*
-			  '(:postgresql :postgresql-socket))
+			  '(:postgresql :postgresql-socket :postgresql-socket3))
 		  :ignore
 		  :warn)))
 	 (clsql:create-table [foo] '(([bar] integer :not-null)

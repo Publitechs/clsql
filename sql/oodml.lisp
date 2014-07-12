@@ -219,19 +219,21 @@
 
 (defun update-auto-increments-keys (class obj database)
   " handle pulling any autoincrement values into the object
-   if normalized and we now that all the "
+    Also handles normalized key chaining"
   (let ((pk-slots (keyslots-for-class class))
         (table (view-table class))
         new-pk-value)
-    (labels ((do-update (slot)
-               (when (and (null (easy-slot-value obj slot))
-                          (auto-increment-column-p slot database))
-                 (update-slot-from-db-value
-                  obj slot
-                  (or new-pk-value
-                      (setf new-pk-value
-                            (database-last-auto-increment-id
-                             database table slot))))))
+    (labels ((do-update (slot &aux (val (easy-slot-value obj slot)))
+               (if val
+                   (setf new-pk-value val)
+                   (update-slot-from-db-value
+                    obj slot
+                    (or new-pk-value
+                        (setf new-pk-value
+                              (database-last-auto-increment-id
+                               database table slot))))))
+             ;; NB: This interacts very strangely with autoincrement keys
+             ;; (see changelog 2014-01-30)
              (chain-primary-keys (in-class)
                "This seems kindof wrong, but this is mostly how it was working, so
                   its here to keep the normalized code path working"
@@ -277,6 +279,7 @@
            (insert-records :into table-sql
                            :av-pairs avps
                            :database database)
+           ;; also handles normalized-class key chaining
            (update-auto-increments-keys view-class obj database)
            ;; we dont set view database here, because there could be
            ;; N of these for each call to update-record-from-* because
@@ -308,19 +311,27 @@
    the public api"
   (update-record-from-slots obj slot :database database))
 
-(defmethod view-classes-and-storable-slots (class)
+(defmethod view-classes-and-storable-slots (class &key to-database-p)
   "Get a list of all the tables we need to update and the slots on them
 
    for non normalized classes we return the class and all its storable slots
 
    for normalized classes we return a list of direct slots and the class they
    came from for each normalized view class
+
+   to-database-p is provided so that we can read / write different data
+   to the database in different circumstances
+   (specifically clsql-helper:dirty-db-slots-mixin which only updates slots
+    that have changed )
   "
   (setf class (to-class class))
   (let* (rtns)
     (labels ((storable-slots (class)
                (loop for sd in (slots-for-possibly-normalized-class class)
-                     when (key-or-base-slot-p sd)
+                     when (and (key-or-base-slot-p sd)
+                               ;; we dont want to insert/update auto-increments
+                               ;; but we do read them
+                               (not (and to-database-p (auto-increment-column-p sd))))
                      collect sd))
              (get-classes-and-slots (class &aux (normalizedp (normalizedp class)))
                (let ((slots (storable-slots class)))
@@ -359,7 +370,7 @@
    view-database slot on the object is nil then the object is assumed to be
    new and is inserted"
   (let ((database (choose-database-for-instance obj database))
-        (classes-and-slots (view-classes-and-storable-slots obj)))
+        (classes-and-slots (view-classes-and-storable-slots obj :to-database-p t)))
     (loop for class-and-slots in classes-and-slots
           do (%update-instance-helper class-and-slots obj database))
     (setf (slot-value obj 'view-database) database)
@@ -388,10 +399,13 @@
          Can we just call build-objects?, update-objects-joins?
   "
 
-  (let* ((classes-and-slots (view-classes-and-storable-slots instance))
+  (let* ((classes-and-slots (view-classes-and-storable-slots
+                             instance :to-database-p nil))
          (vd (choose-database-for-instance instance database)))
     (labels ((do-update (class-and-slots)
-               (let* ((select-list (make-select-list class-and-slots :do-joins-p nil))
+               (let* ((select-list (make-select-list class-and-slots
+                                                     :do-joins-p nil
+                                                     :database database))
                       (view-table (sql-table select-list))
                       (view-qual (key-qualifier-for-instance
                                   instance :database vd
@@ -510,7 +524,7 @@
     (char (if args
               (format nil "CHAR(~D)" (first args))
               "CHAR(1)"))
-    ((varchar string)
+    ((varchar string symbol keyword)
      (if args
          (format nil "VARCHAR(~A)" (car args))
          (format nil "VARCHAR(~D)" *default-string-length*)))
@@ -541,105 +555,112 @@
              db-type type args database)
      (format nil "VARCHAR(~D)" *default-string-length*))))
 
-(defmethod database-output-sql-as-type (type val database db-type)
-  (declare (ignore type database db-type))
-  val)
+(defun print-readable-symbol (in &aux (*package* (find-package :keyword))
+                                 (*print-readably* t))
+  (prin1-to-string in))
 
-(defmethod database-output-sql-as-type ((type symbol) val database db-type)
+(defmethod database-output-sql-as-type
+    (type val database db-type
+     &aux
+     (*print-circle* t) (*print-array* t)
+     (*print-length* nil) (*print-base* #10r10))
   (declare (ignore database))
-  (case type ;; booleans handle null differently
-    ((boolean generalized-boolean)
+  (cond 
+    ((null type) val)
+    ((member type '(boolean generalized-boolean))
+     ;; booleans handle null differently
      (case db-type
        ;; done here so it can be done once
        ((:mssql :mysql) (if val 1 0))
        (otherwise (if val "t" "f"))))
-    (otherwise
-     ;; in all other cases if we have nil give everyone else a shot at it,
-     ;; which by default returns nil
-     (if (null val)
-         (call-next-method)
-         (case type
-           (symbol
-            (format nil "~A::~A"
-                    (package-name (symbol-package val))
-                    (symbol-name val)))
-           (keyword (symbol-name val))
-           (string val)
-           (char (etypecase val
-                   (character (write-to-string val))
-                   (string val)))
-           (float (format nil "~F" val))
-           ((list vector array)
-            (let* ((*print-circle* t)
-                   (*print-array* t)
-                   (value (prin1-to-string val)))
-              value))
-           (otherwise (call-next-method)))))))
+    ((null val)
+     (when (next-method-p)
+       (call-next-method)))
+    (t
+     (case type
+       ((or symbol keyword)
+        (print-readable-symbol val))
+       (string val)
+       (char (etypecase val
+               (character (write-to-string val))
+               (string val)))
+       (float (format nil "~F" val))
+       ((list vector array)
+        (prin1-to-string val))
+       (otherwise
+        (if (next-method-p)
+            (call-next-method)
+            val))))))
 
-(defmethod read-sql-value (val type database db-type
-                           &aux *read-eval*)
-  (declare (ignore database db-type))
-  ;; TODO: All the read-from-strings in here do not check that
-  ;; what we read was of the correct type, should this change?
 
-  ;; TODO: Should this case `(typep val type)=>t` be an around
-  ;; method that short ciruits?
+(defmethod read-sql-value :around
+    (val type database db-type
+     ;; never eval while reading values, always read base 10
+     &aux *read-eval* (*read-base* #10r10))
+  (declare (ignore db-type))
   (cond
-    ((null type) val) ;;we have no desired type, just give the value
-    ((typep val type) val) ;;check that it hasn't already been converted.
-    ((typep val 'string) (read-from-string val)) ;;maybe read will just take care of it?
-    (T (error "Unable to read-sql-value ~a as type ~a" val type))))
+    ;; null value or type
+    ((or (equalp "nil" val) (eql 'null val)) nil) 
+    
+    ;; no specified type or already the right type
+    ((or (null type)
+         (ignore-errors (typep val type)))
+     val)
 
-(defmethod read-sql-value (val (type symbol) database db-type
-                           ;; never eval while reading values
-                           &aux *read-eval*)
-  ;; TODO: All the read-from-strings in here do not check that
-  ;; what we read was of the correct type, should this change?
-  (unless (or (equalp "nil" val) (eql 'null val))
-    (case type
-      ((string varchar) val)
-      (char (etypecase val
-              (string (schar val 0))
-              (character val)))
-      (keyword
-       (when (< 0 (length val))
-         (intern (symbol-name-default-case val) :keyword)))
-      (symbol
-       (when (< 0 (length val))
-         (intern (symbol-name-default-case val))))
-      ((smallint mediumint bigint integer universal-time)
-       (etypecase val
-         (string (parse-integer val))
-         (number val)))
-      ((double-float float)
-       ;; ensure that whatever we got is coerced to a float of the correct
-       ;; type (eg: 1=>1.0d0)
-       (float
-        (etypecase val
-          (string (let ((*read-default-float-format*
-                          (ecase type
-                            (float 'single-float)
-                            (double-float 'double-float))))
-                    (read-from-string val)))
-          (float val))
-        (if (eql type 'double-float) 1.0d0 1.0s0)))
-      (number
-       (etypecase val
+    ;; actually convert
+    (t 
+     (let ((res (handler-bind
+                    ;; all errors should be converted to sql-value-conversion-error
+                    ((error (lambda (c)
+                              (when *debugger-hook*
+                                (invoke-debugger c))
+                              (unless (typep c 'sql-value-conversion-error)
+                                (error-converting-value val type database)))))
+                  (call-next-method))))
+       ;; if we didnt get the right type after converting, we should probably
+       ;; error right away
+       (maybe-error-converting-value
+        res val type database)))))
+
+(defmethod read-sql-value (val type database db-type)
+  ;; errors, nulls and preconverted types are already handled in around
+  (typecase type
+    (symbol
+     (case type
+       ((string varchar) val)
+       (char (string (schar val 0)))
+       ((or keyword symbol)
+        (read-from-string val))
+       ((smallint mediumint bigint integer universal-time)
+        (parse-integer val))
+       ((double-float float)
+        ;; ensure that whatever we got is coerced to a float of the correct
+        ;; type (eg: 1=>1.0d0)
+        (float
+         (etypecase val
+           (string (let ((*read-default-float-format*
+                           (ecase type
+                             (float 'single-float)
+                             (double-float 'double-float))))
+                     (read-from-string val)))
+           ;; maybe wrong type of float
+           (float val)) 
+         (if (eql type 'double-float) 1.0d0 1.0s0)))
+       (number (read-from-string val))
+       ((boolean generalized-boolean)
+        (if (member val '(nil t))
+            val
+            (etypecase val
+              (string
+               (when (member val '("1" "t" "true" "y") :test #'string-equal)
+                 t))
+              (number (not (zerop val))))))
+       ((wall-time duration) (parse-timestring val))
+       (date (parse-datestring val))
+       (t (call-next-method))))
+    (t (typecase val
          (string (read-from-string val))
-         (number val)))
-      ((boolean generalized-boolean)
-       (if (member val '(nil t))
-           val
-           (etypecase val
-             (string
-              (when (member val '("1" "t" "true" "y") :test #'string-equal)
-                t))
-             (number (not (zerop val))))))
-      ((wall-time duration)
-       (parse-timestring val))
-      (date
-       (parse-datestring val))
-      (t (call-next-method)))))
+         (t (error-converting-value val type database))))))
 
 ;; ------------------------------------------------------------
 ;; Logic for 'faulting in' :join slots
@@ -986,7 +1007,13 @@
 (defmethod sql-table ((o select-list))
   (sql-expression :table (view-table o)))
 
-(defun make-select-list (class-and-slots &key (do-joins-p nil))
+(defmethod filter-select-list ((c clsql-sys::standard-db-object)
+                               (sl clsql-sys::select-list)
+                               database)
+  sl)
+
+(defun make-select-list (class-and-slots &key (do-joins-p nil)
+                                         (database *default-database*))
   "Make a select-list for the current class (or class-and-slots) object."
   (let* ((class-and-slots
            (etypecase class-and-slots
@@ -995,7 +1022,8 @@
               ;; find the first class with slots for us to select (this should be)
               ;; the first of its classes / parent-classes with slots
               (first (reverse (view-classes-and-storable-slots
-                               (to-class class-and-slots)))))))
+                               (to-class class-and-slots)
+                                :to-database-p nil))))))
          (class (view-class class-and-slots))
          (join-slots (when do-joins-p (immediate-join-slots class))))
     (multiple-value-bind (slots sqls)
@@ -1006,18 +1034,21 @@
               finally (return (values slots sqls)))
       (unless slots
         (error "No slots of type :base in view-class ~A" (class-name class)))
-      (make-instance
-       'select-list
-       :view-class class
-       :select-list sqls
-       :slot-list slots
-       :join-slots join-slots
-       ;; only do a single layer of join objects
-       :joins (when do-joins-p
-                (loop for js in join-slots
-                      collect (make-select-list
-                               (join-slot-class js)
-                               :do-joins-p nil)))))))
+      (let ((sl (make-instance
+                 'select-list
+                 :view-class class
+                 :select-list sqls
+                 :slot-list slots
+                 :join-slots join-slots
+                 ;; only do a single layer of join objects
+                 :joins (when do-joins-p
+                          (loop for js in join-slots
+                                collect (make-select-list
+                                         (join-slot-class js)
+                                         :do-joins-p nil
+                                         :database database))))))
+        (filter-select-list (make-instance class) sl database)
+        sl))))
 
 (defun full-select-list ( select-lists )
   "Returns a list of sql-ref of things to select for the given classes
@@ -1099,7 +1130,7 @@
                  appending (loop for slot in (immediate-join-slots class)
                                  collect (join-slot-qualifier class slot))))
          (select-lists (loop for class in sclasses
-                             collect (make-select-list class :do-joins-p t)))
+                             collect (make-select-list class :do-joins-p t :database database)))
          (full-select-list (full-select-list select-lists))
          (where (clsql-ands (append (listify where) (listify join-where))))
          #|
