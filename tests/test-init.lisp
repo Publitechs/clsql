@@ -41,28 +41,46 @@
 (defvar *test-report-width* 80 "Width of test report in ems.")
 
 
-(defun test-connect-to-database (db-type spec)
+(defun find-test-connection-spec (db-type &key position)
+  (nth (or position 0)
+       (db-type-spec db-type (read-specs))))
+
+(defun test-connect
+    (&key
+     (db-type *test-database-type* db-type-p)
+     position pool spec)
+  (unless spec
+    (setf spec
+          (or (and (null db-type-p) *test-connection-spec*)
+              (find-test-connection-spec db-type :position position))))
+  (when *default-database*
+    (disconnect :database *default-database*))
+  (setf *test-database-type* db-type
+        *test-database-user*
+        (cond
+          ((member db-type '(:oracle :odbc :aodbc)) (second spec))
+          ((>= (length spec) 3) (third spec)))
+        *test-connection-spec* spec
+        *default-database*
+        (clsql:connect
+         spec
+         :database-type db-type
+         :make-default t
+         :if-exists :old
+         :pool pool)
+        *test-database-underlying-type*
+        (clsql-sys:database-underlying-type *default-database*))
+  *default-database*)
+
+(defun test-setup-database (db-type &key (spec (find-test-connection-spec db-type)))
   (when (clsql-sys:db-backend-has-create/destroy-db? db-type)
     (ignore-errors (destroy-database spec :database-type db-type))
     (ignore-errors (create-database spec :database-type db-type)))
 
-  (setf *test-database-type* db-type)
-  (setf *test-database-user*
-    (cond
-     ((member db-type '(:oracle :odbc :aodbc)) (second spec))
-     ((>= (length spec) 3) (third spec))))
-
   ;; Connect to the database
-  (clsql:connect spec
-                 :database-type db-type
-                 :make-default t
-                 :if-exists :old)
-
+  (test-connect :db-type db-type :spec spec)
   ;; Ensure database is empty
   (truncate-database :database *default-database*)
-
-  (setf *test-database-underlying-type*
-        (clsql-sys:database-underlying-type *default-database*))
 
   ;; If Postgres, turn off notices to console
   (when (eql db-type :postgresql)
@@ -121,11 +139,11 @@
     (let ((suites (intersection suites (default-suites))))
       (when suites
         (dolist (db-type +all-db-types+)
-          (dolist (spec (db-type-spec db-type specs))
-            (let ((*test-connection-spec* spec)
-                  (*test-connection-db-type* db-type))
-              (do-tests-for-backend db-type spec :suites suites)))))))
-  (zerop *error-count*))
+          (dolist (spec (db-type-spec db-type specs))            
+            (format report-stream "~%~%Start Running Tests Against: ~A ~A~%~%" db-type (ignore-errors (subseq spec 0 2)))
+            (do-tests-for-backend db-type spec :suites suites)
+            (format report-stream  "~%~%Finished Running Tests Against: ~A ~A~%~%" db-type (ignore-errors (subseq spec 0 2)))))))
+    (zerop *error-count*)))
 
 (defun load-necessary-systems (specs)
   (dolist (db-type +all-db-types+)
@@ -188,7 +206,7 @@
 
 (defun do-tests-for-backend (db-type spec &key
 			     (suites (default-suites)) )
-  (test-connect-to-database db-type spec)
+  (test-setup-database db-type :spec spec)
   (unwind-protect
        (multiple-value-bind (test-forms skip-tests)
            (compute-tests-for-backend db-type *test-database-underlying-type* :suites suites)
@@ -210,7 +228,7 @@
                      ;; word-wrap the reason string field
                      (let* ((test (car skipped))
                             (reason (cdr skipped))
-                            (rlen (length reason))
+                            ;; (rlen (length reason))
                             (rwidth (max 20 (- (or *test-report-width* 80) max-test-name 3)))
                             (rwords (clsql-sys::delimited-string-to-list reason #\space t))
                             (rformat (format nil "~~{~~<~%~~1,~D:;~~A~~> ~~}" rwidth))
@@ -236,7 +254,8 @@
         (cond
 	  ((and (not (eql db-underlying-type :mysql))
 		(clsql-sys:in test :connection/query-command
-                              :basic/reallybigintegers/1))
+                              :basic/reallybigintegers/1
+                              :connection/pool/procedure-mysql))
 	   (push (cons test "known to work only in MySQL as yet.") skip-tests))
           ((and (null (clsql-sys:db-type-has-views? db-underlying-type))
                 (clsql-sys:in test :fddl/view/1 :fddl/view/2 :fddl/view/3 :fddl/view/4))
@@ -363,10 +382,9 @@
 
 (defun rapid-load (type &optional (position 0))
   "Rapid load for interactive testing."
-  (when *default-database*
-      (disconnect :database *default-database*))
-  (test-connect-to-database type (nth position (db-type-spec type (read-specs))))
-  ;(test-initialise-database)
+  (test-setup-database
+   type
+   :spec (find-test-connection-spec type :position position))
   *default-database*)
 
 (defun rl ()
