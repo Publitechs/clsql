@@ -164,11 +164,14 @@
                              (t 1)))
                      (mysql-options mysql-ptr option-code fo)))))))))))
 
+(defvar +mysql-init-mutex+ (bt:make-lock "mysql-init-mutex"))
+
 (defmethod database-connect (connection-spec (database-type (eql :mysql)))
   (check-connection-spec connection-spec database-type
                          (host db user password &optional port options))
+  (bt:with-lock-held (+mysql-init-mutex+)
   (destructuring-bind (host db user password &optional port options) connection-spec
-    (let ((mysql-ptr (mysql-init (uffi:make-null-pointer 'mysql-mysql)))
+    (let ((mysql-ptr  (mysql-init (uffi:make-null-pointer 'mysql-mysql)))
           (socket nil))
       (if (uffi:null-pointer-p mysql-ptr)
           (error 'sql-connection-error
@@ -218,7 +221,7 @@
                                (progn
                                  (warn "Error setting ANSI mode for MySQL.")
                                  db)))))
-                (when error-occurred (mysql-close mysql-ptr)))))))))
+                (when error-occurred (mysql-close mysql-ptr))))))))))
 
 
 (defmethod database-disconnect ((database mysql-database))
