@@ -128,6 +128,30 @@
 (uffi:def-foreign-type mysql-bind (* :void))
 
 ;;;; The Foreign C routines
+(declaim (inline mysql-server-init))
+(uffi:def-function "mysql_server_init"
+    ((argc :int)
+     (argv (* :cstring))
+     (groups (* :cstring)))
+  :module "mysql"
+  :returning :int)
+
+(declaim (inline mysql-library-init))
+(defun mysql-library-init (argc argv groups)
+  (mysql-server-init argc argv groups))
+
+(declaim (inline mysql-thread-init))
+(uffi:def-function "mysql_thread_init"
+  ()
+  :module "mysql"
+  :returning :void)
+
+(declaim (inline mysql-thread-end))
+(uffi:def-function "mysql_thread_end"
+  ()
+  :module "mysql"
+  :returning :void)
+
 (declaim (inline mysql-init))
 (uffi:def-function "mysql_init"
   ((mysql mysql-mysql))

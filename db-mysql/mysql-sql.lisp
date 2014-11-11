@@ -93,7 +93,8 @@
   ((mysql-ptr :accessor database-mysql-ptr :initarg :mysql-ptr
               :type mysql-mysql-ptr-def)
    (server-info :accessor database-server-info :initarg :server-info
-                :type string)))
+                :type string)
+   (mutex :accessor database-mutex :initarg :mutex)))
 
 (defmethod database-type ((database mysql-database))
   :mysql)
@@ -164,7 +165,7 @@
                              (t 1)))
                      (mysql-options mysql-ptr option-code fo)))))))))))
 
-(defvar +mysql-init-mutex+ (bt:make-lock "mysql-init-mutex"))
+(defparameter +mysql-init-mutex+ (bt:make-lock "mysql init mutex"))
 
 (defmethod database-connect (connection-spec (database-type (eql :mysql)))
   (check-connection-spec connection-spec database-type
@@ -196,7 +197,7 @@
                            (null 0)
                            (integer port)
                            (string (parse-integer port)))
-                         socket-native 131072))  ; 131072 stands for CLIENT_MULTI_RESULTS
+                         socket-native 135168))  ; 131072 stands for CLIENT_MULTI_RESULTS
                        (progn
                          (setq error-occurred t)
                          (error 'sql-connection-error
@@ -212,15 +213,18 @@
                                                :connection-spec connection-spec
                                                :server-info (uffi:convert-from-cstring
                                                              (mysql:mysql-get-server-info mysql-ptr))
+                                               :mutex (bt:make-lock "mysql-per-connection-mutex")
                                                :mysql-ptr mysql-ptr))
                               (cmd "SET SESSION sql_mode='ANSI'"))
-                         (uffi:with-cstring (cmd-cs cmd)
-                           (if (zerop (mysql-real-query mysql-ptr cmd-cs (uffi:foreign-encoded-octet-count
-                                                                          cmd :encoding (encoding db))))
-                               db
-                               (progn
-                                 (warn "Error setting ANSI mode for MySQL.")
-                                 db)))))
+                         db
+                         ;; (uffi:with-cstring (cmd-cs cmd)
+                         ;;   (if (zerop (mysql-real-query mysql-ptr cmd-cs (uffi:foreign-encoded-octet-count
+                         ;;                                                  cmd :encoding (encoding db))))
+                         ;;       db
+                         ;;       (progn
+                         ;;         (warn "Error setting ANSI mode for MySQL.")
+                         ;;         db)))
+                         ))
                 (when error-occurred (mysql-close mysql-ptr))))))))))
 
 
@@ -247,66 +251,68 @@
 (defmethod database-query (query-expression (database mysql-database)
 			   result-types field-names)
   (declare (optimize (speed 3)))
-  (let ((mysql-ptr (database-mysql-ptr database))
-        (results nil)     ;; all the results and column-names in reverse-order
-        res-ptr (num-fields 0))
-    (declare (type mysql-mysql-ptr-def mysql-ptr res-ptr)
-             (fixnum num-fields))
-    (when (database-execute-command query-expression database)
-      (labels
-          ((get-row (row lengths)
-             "Pull a single row value from the results"
-             (loop for i from 0 below num-fields
-                   collect
-                      (convert-raw-field
-                       (uffi:deref-array row '(:array (* :unsigned-char))
-                                         (the fixnum i))
-                       (nth i result-types)
-                       :length
-                       (uffi:deref-array lengths '(:array :unsigned-long)
-                                         (the fixnum i))
-                       :encoding (encoding database))))
-           (get-result-rows ()
-             "get all the rows out of the now valid results set"
-             (loop for row = (mysql-fetch-row res-ptr)
-                   for lengths = (mysql-fetch-lengths res-ptr)
-                   until (uffi:null-pointer-p row)
-                   collect (get-row row lengths)))
-           (do-result-set ()
-             "for a mysql-ptr, grab and return a results set"
-             (setf res-ptr (mysql-use-result mysql-ptr))
-             (cond
-               ((or (null res-ptr) (uffi:null-pointer-p res-ptr))
-                (unless (zerop (mysql-errno mysql-ptr))
-                  ;;from http://dev.mysql.com/doc/refman/5.0/en/mysql-field-count.html
-                  ;; if mysql_use_result or mysql_store_result return a null ptr,
-                  ;; we use a mysql_errno check to see if it had a problem or just
-                  ;; was a query without a result. If no error, just return nil.
-                  (error 'sql-database-data-error
-                         :database database
-                         :expression query-expression
-                         :error-id (mysql-errno mysql-ptr)
-                         :message (mysql-error-string mysql-ptr))))
-               (t 
-                (unwind-protect                           
-                     (progn (setf num-fields (mysql-num-fields res-ptr)
-                                  result-types (canonicalize-types
-                                                result-types res-ptr)) 
-                            (push (get-result-rows) results)
-                            (push (when field-names
-                                    (result-field-names res-ptr))
-                                  results))
-                  (mysql-free-result res-ptr))))))
-        
-        (loop
-          do (do-result-set)
-          while (let ((next (mysql-next-result mysql-ptr)))
-                  (case next
-                    (0 t)            ;Successful and there are more results
-                    (-1 nil)         ;Successful and there are no more results
-                    (t nil)          ;errors
-                    )))
-        (values-list (nreverse results))))))
+  (bt:With-lock-held ((database-mutex database))
+    (mysql-library-init 0 (uffi:make-null-pointer :wtf?) (uffi:make-null-pointer :wtf?))
+    (let ((mysql-ptr (database-mysql-ptr database))
+          (results nil)     ;; all the results and column-names in reverse-order
+          res-ptr (num-fields 0))
+      (declare (type mysql-mysql-ptr-def mysql-ptr res-ptr)
+               (fixnum num-fields))
+      (when (database-execute-command query-expression database)
+        (labels
+            ((get-row (row lengths)
+               "Pull a single row value from the results"
+               (loop for i from 0 below num-fields
+                     collect
+                        (convert-raw-field
+                         (uffi:deref-array row '(:array (* :unsigned-char))
+                                           (the fixnum i))
+                         (nth i result-types)
+                         :length
+                         (uffi:deref-array lengths '(:array :unsigned-long)
+                                           (the fixnum i))
+                         :encoding (encoding database))))
+             (get-result-rows ()
+               "get all the rows out of the now valid results set"
+               (loop for row = (mysql-fetch-row res-ptr)
+                     for lengths = (mysql-fetch-lengths res-ptr)
+                     until (uffi:null-pointer-p row)
+                     collect (get-row row lengths)))
+             (do-result-set ()
+               "for a mysql-ptr, grab and return a results set"
+               (setf res-ptr (mysql-use-result mysql-ptr))
+               (cond
+                 ((or (null res-ptr) (uffi:null-pointer-p res-ptr))
+                  (unless (zerop (mysql-errno mysql-ptr))
+                    ;;from http://dev.mysql.com/doc/refman/5.0/en/mysql-field-count.html
+                    ;; if mysql_use_result or mysql_store_result return a null ptr,
+                    ;; we use a mysql_errno check to see if it had a problem or just
+                    ;; was a query without a result. If no error, just return nil.
+                    (error 'sql-database-data-error
+                           :database database
+                           :expression query-expression
+                           :error-id (mysql-errno mysql-ptr)
+                           :message (mysql-error-string mysql-ptr))))
+                 (t 
+                  (unwind-protect                           
+                       (progn (setf num-fields (mysql-num-fields res-ptr)
+                                    result-types (canonicalize-types
+                                                  result-types res-ptr)) 
+                              (push (get-result-rows) results)
+                              (push (when field-names
+                                      (result-field-names res-ptr))
+                                    results))
+                    (mysql-free-result res-ptr))))))
+          
+          (loop
+            do (do-result-set)
+            while (let ((next (mysql-next-result mysql-ptr)))
+                    (case next
+                      (0 t)            ;Successful and there are more results
+                      (-1 nil)         ;Successful and there are no more results
+                      (t nil)          ;errors
+                      )))
+          (values-list (nreverse results)))))))
 
 
 (defstruct mysql-result-set

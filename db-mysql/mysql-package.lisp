@@ -76,7 +76,10 @@
      #:mysql-mysql-res
 
      ;; functions
+     #:mysql-library-init
      #:mysql-init
+     #:mysql-thread-init
+     #:mysql-thread-end
      #:mysql-connect
      #:mysql-real-connect
      #:mysql-close

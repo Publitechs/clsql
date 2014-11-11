@@ -70,6 +70,7 @@ error is signalled."
     (null
      (error "A database must be specified rather than NIL."))))
 
+(defparameter +connected-databases-mutex+ (bt:make-lock "connected databases mutex"))
 
 (defun connect (connection-spec
                 &key (if-exists *connect-if-exists*)
@@ -153,7 +154,8 @@ be taken from this pool."
                   (database-connect connection-spec database-type)))
         (when result
           (setf (slot-value result 'state) :open)
-          (pushnew result *connected-databases*)
+          (bt:with-lock-held (+connected-databases-mutex+)
+            (pushnew result *connected-databases*))
           (when make-default (setq *default-database* result))
           (setf (encoding result) encoding)
           result))))
@@ -180,9 +182,10 @@ from a pool it will be released to this pool."
               t))
           (when (database-disconnect database)
 	    ;;TODO: RACE COND: 2 threads disconnecting could stomp on *connected-databases*
-            (setf *connected-databases* (delete database *connected-databases*))
-            (when (eq database *default-database*)
-              (setf *default-database* (car *connected-databases*)))
+            (bt:with-lock-held (+connected-databases-mutex+)
+              (setf *connected-databases* (delete database *connected-databases*))
+              (when (eq database *default-database*)
+                (setf *default-database* (car *connected-databases*))))
             (setf (slot-value database 'state) :closed)
             t)))))
 
