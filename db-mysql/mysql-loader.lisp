@@ -35,6 +35,21 @@ set to the right path before compiling or loading the system.")
 (defmethod clsql-sys:database-type-library-loaded ((database-type (eql :mysql)))
   *mysql-library-loaded*)
 
+
+(declaim (inline mysql-server-init))
+(uffi:def-function "mysql_server_init"
+    ((argc :int)
+     (argv (* :cstring))
+     (groups (* :cstring)))
+  :module "mysql"
+  :returning :int)
+
+(declaim (inline mysql-library-init))
+(defun mysql-library-init (argc argv groups)
+  (mysql-server-init argc argv groups))
+
+(sb-alien:define-alien-routine "os_install_interrupt_handlers" sb-alien:void)
+
 (defmethod clsql-sys:database-type-load-foreign ((database-type (eql :mysql)))
   (unless *mysql-library-loaded*
     (clsql:push-library-path clsql-mysql-system::*library-file-dir*)
@@ -46,6 +61,8 @@ set to the right path before compiling or loading the system.")
     (clsql-uffi:find-and-load-foreign-library *clsql-mysql-library-candidate-names*
                                               :module "clsql-mysql"
                                               :supporting-libraries *mysql-supporting-libraries*)
+    (mysql-library-init 0 (cffi:null-pointer) (cffi:null-pointer))
+    (os-install-interrupt-handlers)
     (setq *mysql-library-loaded* t)))
 
 (clsql-sys:database-type-load-foreign :mysql)
