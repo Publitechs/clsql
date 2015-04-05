@@ -232,7 +232,7 @@
   t)
 
 (defmethod database-execute-command (sql-expression (database mysql-database))
-  (bt:with-lock-held (+mysql-init-mutex+)
+  (let ((cffi::*default-foreign-encoding* (encoding database)))
     (uffi:with-cstring (sql-native sql-expression)
       (let ((mysql-ptr (database-mysql-ptr database)))
         (declare (type mysql-mysql-ptr-def mysql-ptr))
@@ -249,9 +249,9 @@
 
 (defmethod database-query (query-expression (database mysql-database)
 			   result-types field-names)
-  (declare (optimize (speed 3)))
-  (bt:With-lock-held ((database-mutex database))
-    (mysql-library-init 0 (uffi:make-null-pointer :wtf?) (uffi:make-null-pointer :wtf?))
+  ;(declare (optimize (speed 3)))
+  (bt:With-lock-held (+mysql-init-mutex+)
+    ;(mysql-library-init 0 (uffi:make-null-pointer :wtf?) (uffi:make-null-pointer :wtf?))
     (let ((mysql-ptr (database-mysql-ptr database))
           (results nil)     ;; all the results and column-names in reverse-order
           res-ptr (num-fields 0))
