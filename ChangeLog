@@ -1,3 +1,46 @@
+2015-06-02 Daniel Kochmański <dkochmanski@turtle-solutions.eu>
+	* clsql.asd, sql/package.lisp: Add ECL compatibility fixes
+	* sql/db-interface.lisp: Fix declaration typo
+
+2015-04-06 Russ Tyndall <russ@acceleration.net>
+	* sql/operations, sql/expressions: add postgresql E-string
+	operator / expression.  Needed for correct regex handling
+	EG: [E "some string"]=> E'some string'
+
+2015-03-24 Russ Tyndall <russ@acceleration.net>
+	* sql/oodml.lisp: fixed call-next-method in the base of
+	read-sql-value and replaced with a continuable
+	sql-value-conversion-error
+	* default read-sql-value for list
+	* tests for sql-value-conversion-errors and list
+
+2015-03-18 Russ Tyndall <russ@acceleration.net>
+	* {uffi,db-mysql}/Makefile: remove -pie build hardening for
+	which caused load issues for Linux Mint
+
+2015-02-26 Kevin Rosenberg <kevin@rosenberg.net>
+	* Version 6.6.0 release
+	* {uffi,db-mysql}/Makefile: Add build hardening for Debian
+
+2015-02-24 Russ Tyndall <russ@acceleration.net>
+	* mysql-sql.lisp
+	an error in type declarations generating a compilation warning
+	was being treated as an error in recent SBCLs, fixed the type
+	warning by correcting the type (still a ton of compliation
+	notes)
+
+2015-02-23 Russ Tyndall <russ@acceleration.net>
+	* sql/metaclasses.lisp
+	made reinitialize-instance return the instance passed to it as
+	SBCL now expected (mentioned on the SBCL-devel mailing list by
+	Stas
+
+2014-12-03 Russ Tyndall <russ@acceleration.net>
+	* sqlite-sql.lisp
+	Added database arg to `canonicalize-result-types` so that it could
+	correctly call `sqlite-aref` with the required number of arguments
+	Thanks Zach Beane for the bug report.
+
 2014-07-29 Russ Tyndall <russ@acceleration.net>
 	* mysql-api.lisp, mysql-sql.lisp, test-connection.lisp
 	Added code to the mysql backend to pull all result sets as

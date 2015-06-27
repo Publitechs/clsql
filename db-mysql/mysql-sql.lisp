@@ -249,13 +249,16 @@
 
 (defmethod database-query (query-expression (database mysql-database)
 			   result-types field-names)
+<<<<<<< HEAD
   ;(declare (optimize (speed 3)))
   (bt:With-lock-held (+mysql-init-mutex+)
     ;(mysql-library-init 0 (uffi:make-null-pointer :wtf?) (uffi:make-null-pointer :wtf?))
     (let ((mysql-ptr (database-mysql-ptr database))
           (results nil)     ;; all the results and column-names in reverse-order
-          res-ptr (num-fields 0))
-      (declare (type mysql-mysql-ptr-def mysql-ptr res-ptr)
+          (res-ptr nil)
+          (num-fields 0))
+      (declare (type mysql-mysql-ptr-def mysql-ptr)
+               (type (or null mysql-mysql-res-ptr-def) res-ptr)
                (fixnum num-fields))
       (when (database-execute-command query-expression database)
         (labels
